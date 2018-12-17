@@ -1,0 +1,200 @@
+:source-highlighter: pygments
+:imagesdir: img/HACKControlFlowRedirection/
+== Buffer-overflow 1.0
+
+In this article, we are going to explain the principle of stack buffer-overflow. It will be a very basic example in order to understand the basis of such exploit.
+
+=== Example source code
+Let take an example. We will use the same example throughout all the articles about buffer-overflow. Some part are usefull now and will be useless in the next episode. Some part are useless now, but will be usefull in the next episode.
+
+[source,c++,numbered]
+----
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#define ERROR 1
+#define SUCCESS 0
+
+void gimmeShell() {
+    printf("> Here a new shell Bro. \n");
+    system("/bin/sh");
+}
+
+void vuln(uint8_t size) {
+    const char* name = getenv("HACK_NAME");
+    if (name == NULL) {
+        printf("> May I suggest you to set the HACK_NAME env var?\n");
+    } else {
+        printf("> Hi ");
+        printf(name);
+        printf("!\n");
+    }
+
+    printf("> Allocating buffer of size: %d\n", size);
+    char buffer[size];
+    printf("> Ok, now give me the name of our president.\n");
+    gets(buffer);
+}
+
+int main(int argc, char* argv[]) {
+    if (argc != 2) {
+        printf("> Please, gimme a number.\n");
+        exit(ERROR);
+    }
+
+    int8_t size = atoi(argv[1]);
+    if (size > 10) {
+        printf("> Too big for me.\n");
+        exit(ERROR);
+    } else if (size == 0) {
+        printf("> Please, not zero. Or just give me a number.\n");
+        exit(ERROR);
+    }
+
+    vuln(size);
+
+    return SUCCESS;
+}
+----
+
+==== Compilation
+Take the source code and compile it with the following commandline:
+[source, bash]
+----
+clang -m32 -o weak main.c -fno-stack-protector -z execstack -w
+----
+
+The `-m32` options tells the compiler to compile to a 32 bits target.
+
+The `-f-no-stack-protector` tells to the compiler to not include stack protection. We will see in next articles what is it.
+
+The `-z execstack` tells to the compiler to make the stack executable. We will see in the next article what is it.
+
+IMPORTANT: Now, take your time to analyse what the program do. Can you spot problems ?
+
+==== Programmers are problems
+The program needs an input from the command line (especially in `argv[1]`). We can see that there is a check to force the size to be between 1 and 10, otherwise the program stops. This is a highly secure mechanism to be sure that the allocated buffer (called `buffer`) in the `vuln` function will have a size between 1 and 10.
+
+IMPORTANT: If you haven't spot problem before, try again.
+
+What if `argv[1]` contains `-1` ? The `size` variable of the `main` function will contains the value `-1`. Then the `vuln` function will be called with `-1` as parameter, so `size` of the `vuln` function will be `-1`. Oh wait, no. `size` of the `vuln` function is defined as a `uint8_t` whereas the `size` of the `main` function is defined as a `int8_t`. So `size` of the `vuln` function is actually `255`. So at line `24`, we allocate a buffer of size `255`. Wow, we have easily bypassed a highly secure mechanism.
+
+TIP: This is funny, but not very useful. Have you spot another problem ?
+
+==== Buffer-overflow
+Have a closer look at lines `24` and `26`. We allocate a buffer on the stack and then read from `stdin` via the `gets` function.
+
+If you read the warning from the compiler, you should have spot the vulnerability.
+[source]
+----
+ warning: the gets function is dangerous and should not be used.
+----
+Type `man gets` in your terminal and go to the `BUG` section.
+[source]
+----
+BUGS
+       Never use gets(). Because it is impossible to tell without knowing the data in advance how many characters gets() will read, and because gets() will continue to store characters past the end of the buffer, it is extremely dangerous to use.
+----
+
+Let imagine that we run the program (called `weak`) with `4` in `argv[1]`. This means that we allocate a 4 bytes buffer. What if my president name has a lot of letters ?
+
+image::segfault.png[]
+
+Oops, we broke something: we overflows our buffer.
+
+=== Code redirection
+This part is the most important part of this article. We will explain how we can redirect code execution to something cool. In our case, we want to redirect code execution to the function `gimmeShell` which gives you, guess what... a shell.
+
+==== Calling convention
+In a 32bits linux, when calling a function, the following steps are executed in the caller:
+
+* Parameters are pushed on the stack.
+* The return address is pushed on the stack.
+* The `EBP` register is pushed on the stack.
+
+In the caller, the following steps are executed:
+
+* We "allocate" spaces for local variables. Basically, we decrease `ESP`.
+
+So at the beginning of the called function, the stack looks like:
+
+image::defaultstack.png[centered, width=25%]
+
+For example, for the `vuln` function, the stack looks like:
+
+image::vulnstack.png[centered, width=25%]
+
+==== Exploit
+If we write a lot of characters to `buffer`, we will overwrite `name`, the old `EPB` value and finally the return address ! So if we are clever, we can control the execution flow. 
+
+Our input will look like :
+
+[source, bash]
+----
+[padding] [target address]
+----
+
+Our goal is to overwrite the return address with an address that gives us a shell. In this very simple example, we just have to replace the return adress by the address of the `gimmeShell` function.
+
+===== Find target address
+To get the address of `gimmeShell`, we are using `gdb` which is a debugger. Just type `gdb ./weak` in your terminal and you'll get a `gdb` shell. Then run `disass gimmeShell` to print to disassembly of the function.
+
+image::disassgimmeshell.png[centered]
+
+Note that I am using the Intel desassembly flavor, which is not the default one for `gdb`. You can change it by typing `set disassembly-flavor intel` on the `gdb` shell.
+
+On the left of the screen, you can see the address of each instruction. We want to jump at the beginning of the `gimmeShell` function, so we have to jump to the address `0x08048500`.
+
+==== Find padding offset
+Finding the padding means finding the number of bytes to write to stop just before the return address.
+
+I will show you a very experimental way to do it. Let fire `gdb` again. Then disassemble `main` to find the return adress of the `vuln` function and locate the call to `vuln` in the `main` function.
+
+image::vulncall.png[centered]
+
+The return address of `main` is the address of the instruction just after the call to `vuln`, so in my case `0x080486D8`.
+
+Now, disassemble the `vuln` function and set a breakpoint just after the call the `gets` (which is obviously the cause of our troubles). Then type `run -1` and type `AAAAAAAAAA` when prompt. Then, it should stop at the desired location. Then show 100 bytes from the stack by typing `x/100x $esp`.
+
+image::fullexample.png[centered]
+
+We see at the beginning plenty of `0x41` which are our input `AAAAAAAAAA`. Now, found the return address of the vuln function (Hint: at the bottom right).
+
+IMPORTANT: How many characters are needed to pad our buffer ?
+
+Easy ! Just count the number of bytes between the base of our `0x41` and the return address. In our case, 316 bytes.
+
+Now we are happy because we have everything to build our payload:
+
+[source, bash]
+----
+["A"*316] [0x08048500]
+----
+
+To implement our exploit, just write a small python script that uses the `pwntool` library and run it !
+
+[source, python]
+----
+from pwn import *
+from struct import pack
+
+elf = process(["./weak", "-1"])
+
+p = "A"*316
+p += pack("I", 0x08048500)
+
+elf.sendline(p)
+elf.interactive()
+----
+
+The source code is very easy, but don't hesitate to have a look at the documentation of both `pwntool` and `struct`.
+
+And then, finally, you'll get a shell:
+
+image::final.png[centered]
+
+==== Exploit mitigation
+As you may expect, such simple exploit are no more possible on modern architecture with modern security mecanism. One possible mitigation is the canary. We will see more details in the next article but basically. A value is push on the stack just before the return address, at the beginning of the function. At the end of the function, just before the `ret` instruction, we check if the value is still the same. If yes, we execute the `ret`. Otherwise, the stack has been compromised: PANIC.
+
+And of course, in real code, the `gimmeShell` function would not have existed.
