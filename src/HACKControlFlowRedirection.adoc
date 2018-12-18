@@ -32,9 +32,9 @@ void vuln(uint8_t size) {
     }
 
     printf("> Allocating buffer of size: %d\n", size);
-    char buffer[size];
+    char buffer[size]; // [1]
     printf("> Ok, now give me the name of our president.\n");
-    gets(buffer);
+    gets(buffer); // [2]
 }
 
 int main(int argc, char* argv[]) {
@@ -78,12 +78,12 @@ The program needs an input from the command line (especially in `argv[1]`). We c
 
 IMPORTANT: If you haven't spot problem before, try again.
 
-What if `argv[1]` contains `-1` ? The `size` variable of the `main` function will contains the value `-1`. Then the `vuln` function will be called with `-1` as parameter, so `size` of the `vuln` function will be `-1`. Oh wait, no. `size` of the `vuln` function is defined as a `uint8_t` whereas the `size` of the `main` function is defined as a `int8_t`. So `size` of the `vuln` function is actually `255`. So at line `24`, we allocate a buffer of size `255`. Wow, we have easily bypassed a highly secure mechanism.
+What if `argv[1]` contains `-1` ? The `size` variable of the `main` function will contains the value `-1`. Then the `vuln` function will be called with `-1` as parameter, so `size` of the `vuln` function will be `-1`. Oh wait, no. `size` of the `vuln` function is defined as a `uint8_t` whereas the `size` of the `main` function is defined as a `int8_t`. So `size` of the `vuln` function is actually `255`. So at line `[1]`, we allocate a buffer of size `255`. Wow, we have easily bypassed a highly secure mechanism.
 
 TIP: This is funny, but not very useful. Have you spot another problem ?
 
 ==== Buffer-overflow
-Have a closer look at lines `24` and `26`. We allocate a buffer on the stack and then read from `stdin` via the `gets` function.
+Have a closer look at lines `[1]` and `[2]`. We allocate a buffer on the stack and then read from `stdin` via the `gets` function.
 
 If you read the warning from the compiler, you should have spot the vulnerability.
 [source]
@@ -113,7 +113,7 @@ In a 32bits linux, when calling a function, the following steps are executed in 
 * The return address is pushed on the stack.
 * The `EBP` register is pushed on the stack.
 
-In the caller, the following steps are executed:
+In the callee, the following steps are executed:
 
 * We "allocate" spaces for local variables. Basically, we decrease `ESP`.
 
