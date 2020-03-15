@@ -1,0 +1,56 @@
+== Configuration manuelle du DNS avec OpenVPN
+
+Dans cet article, nous allons apprendre à configurer manuellement un serveur DNS lors d'une connexion à un VPN OpenVPN, sur un système *Ubuntu, Debian et dérivés.
+
+=== Vérification du resolver DNS
+
+Cet article est valable uniquement pour les systèmes utilisant `systemd-resolved` comme résolver DNS. Pour vérifier que c'est bien votre cas, lancez la commande suivante. Le service doit être `active` et `running`.
+
+[source, bash]
+----
+sudo systemctl status systemd-resolved.service
+----
+
+=== Nettoyer, balayer, astiquer
+
+Si vous aviez fait des tentatives de configuration DNS via le network-manager ou par tout autre moyen, remettez tout à la normal et spécifier uniquement un seul serveur DNS (`1.1.1.1` celui de CloudFare par exemple).
+
+Si vous aviez fait des tentatives de modification de votre fichier OpenVPN, remettez le comme on vous l'a fourni.
+
+=== Désactiver le cache DNS
+
+Pour améliorer la rapidité des requêtes DNS, `systemd-resolved` met en cache les requêtes qu'il effectue. Pour une raison obscure, mon cache n'était pas vidé au moment de la connexion au VPN.
+Nous allons donc désactiver le cache.
+
+Vider le cache actuel avec la commande suivante:
+[source, bash]
+----
+sudo systemd-resolve --flush-caches
+----
+
+Modifier ensuite le fichier `/etc/systemd/resolved.conf` et ajouter la ligne `Cache=no`.
+
+=== Installer le paquet `resolvconf`
+
+Lancer la commande suivante pour installer le paquet `resolvconf`. Cet outil permet à OpenVPN de mettre à jour les serveurs DNS utilisés pour la résolution de noms.
+[source, bash]
+----
+sudo apt install resolvconf
+----
+
+=== Modification du fichier OpenVPN
+
+Nous allons maintenant indiquer manuellement à OpenVPN notre serveur DNS et lui demander de bien vouloir mettre à jour au niveau système la liste des serveurs DNS lors de la connexion et déconnexion du VPN.
+Pour se faire, en supposant que votre DNS se trouve à l'ip `192.168.100.254`, il suffit de rajouter ces lignes suivantes avant la ligne `remote-cert-tls server`:
+[source, bash]
+----
+script-security 2                                                                                                       
+dhcp-option DNS 192.168.100.254
+up /etc/openvpn/update-resolv-conf                                                                                      
+down /etc/openvpn/update-resolv-conf  
+----
+
+
+=== The final coutdown
+
+Redémarrez votre ordinateur, et normalement tout marche !
